@@ -87,6 +87,9 @@ class RetinaNet(nn.Module):
 
     def forward(self, images, gt_boxes=None, gt_labels=None, ego_labels=None, counts=None, img_indexs=None, get_features=False):
         sources, ego_feat = self.backbone(images)
+        # print(sources.shape)
+        # print(ego_feat.shape)
+        
         
         ego_preds = self.ego_head(
             ego_feat).squeeze(-1).squeeze(-1).permute(0, 2, 1).contiguous()

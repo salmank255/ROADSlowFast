@@ -174,6 +174,14 @@ class ResNetFPN(nn.Module):
         p6 = self.conv6(c5)
         p7 = self.conv7(F.relu(p6))
 
+        print('p3',p3.shape)
+        print('p4',p4.shape)
+        print('p5',p5.shape)
+        print('p6',p6.shape)
+        print('p7',p7.shape)
+        
+        
+
         features = [p3, p4, p5, p6, p7]
         
         ego_feat = self.avg_pool(p7)
@@ -181,7 +189,8 @@ class ResNetFPN(nn.Module):
             for i in range(len(features)):
                 features[i] = self._upsample_time(features[i])
             ego_feat = self._upsample_time(ego_feat)
-        
+        # print(features.shape)
+        # print(ego_feat.shape)
         return features, ego_feat
 
 
@@ -290,5 +299,8 @@ def resnetfpn(args):
         return ResNetFPN(BottleneckRCLSTM, args)
     elif model_type.startswith('RCGRU'):
         return ResNetFPN(BottleneckRCGRU, args)
+    elif model_type.startswith('slowfast'):
+        return ResNetFPN(BottleneckI3D, args)
+
     else:
         raise RuntimeError('Define the model type correctly:: ' + model_type)

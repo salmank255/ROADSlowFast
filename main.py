@@ -1,444 +1,285 @@
-import multiprocessing as mp
-mp.set_start_method('spawn', force=True)
+
 import os
-import argparse
-import json
-import pprint
-import socket
-import time
-from easydict import EasyDict
-import yaml
-from tensorboardX import SummaryWriter
-
+import sys
 import torch
-import torch.optim as optim
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel
-
-from calc_mAP import run_evaluation
-from datasets import ava, spatial_transforms, temporal_transforms
-from distributed_utils import init_distributed
-import losses
-from models import AVA_model
-from scheduler import get_scheduler
-from utils import *
-
-
-def main(local_rank, args):
-    '''dist init'''
-    rank, world_size = init_distributed(local_rank, args)
-
-    with open(args.config) as f:
-        config = yaml.load(f, Loader=yaml.FullLoader)
-
-    opt = EasyDict(config)
-    opt.world_size = world_size
-
-    if rank == 0:
-        mkdir(opt.result_path)
-        mkdir(os.path.join(opt.result_path, 'tmp'))
-        with open(os.path.join(opt.result_path, 'opts.json'), 'w') as opt_file:
-            json.dump(vars(opt), opt_file, indent=2)
-        logger = create_logger(os.path.join(opt.result_path, 'log.txt'))
-        logger.info('opt: {}'.format(pprint.pformat(opt, indent=2)))
-        
-        writer = SummaryWriter(os.path.join(opt.result_path, 'tb'))
-    else:
-        logger = writer = None
-    dist.barrier()
-
-    random_seed(opt.manual_seed)
-    # setting benchmark to True causes OOM in some cases
-    if opt.get('cudnn', None) is not None:
-        torch.backends.cudnn.deterministic = opt.cudnn.get('deterministic', False)
-        torch.backends.cudnn.benchmark = opt.cudnn.get('benchmark', False)
-
-    # create model
-    net = AVA_model(opt.model)
-    net.cuda()
-    net = DistributedDataParallel(net, device_ids=[local_rank], broadcast_buffers=False)
-
-    if rank == 0:
-        logger.info(net)
-        logger.info(parameters_string(net))
-
-    if not opt.get('evaluate', False):
-        train_aug = opt.train.augmentation
-
-        spatial_transform = [getattr(spatial_transforms, aug.type)(**aug.get('kwargs', {})) for aug in train_aug.spatial]
-        spatial_transform = spatial_transforms.Compose(spatial_transform)
-
-        temporal_transform = getattr(temporal_transforms, train_aug.temporal.type)(**train_aug.temporal.get('kwargs', {}))
-
-        train_data = ava.AVA(
-            opt.train.root_path,
-            opt.train.annotation_path,
-            spatial_transform,
-            temporal_transform
-        )
-
-        train_sampler = DistributedSampler(train_data, round_down=True)
-
-        train_loader = ava.AVADataLoader(
-            train_data,
-            batch_size=opt.train.batch_size,
-            shuffle=False,
-            num_workers=opt.train.get('workers', 1),
-            pin_memory=True,
-            sampler=train_sampler,
-            drop_last=True
-        )
-
-        if rank == 0:
-            logger.info('# train data: {}'.format(len(train_data)))
-            logger.info('train spatial aug: {}'.format(spatial_transform))
-            logger.info('train temporal aug: {}'.format(temporal_transform))
-
-            train_logger = Logger(
-                os.path.join(opt.result_path, 'train.log'),
-                ['epoch', 'loss', 'lr'])
-            train_batch_logger = Logger(
-                os.path.join(opt.result_path, 'train_batch.log'),
-                ['epoch', 'batch', 'iter', 'loss', 'lr'])
-        else:
-            train_logger = train_batch_logger = None
-
-        optim_opt = opt.train.optimizer
-        sched_opt = opt.train.scheduler
-
-        optimizer = getattr(optim, optim_opt.type)(
-            net.parameters(),
-            lr=sched_opt.base_lr,
-            **optim_opt.kwargs
-        )
-        scheduler = get_scheduler(sched_opt, optimizer, opt.train.n_epochs, len(train_loader))
-
-    val_aug = opt.val.augmentation
-
-    transform_choices, total_choices = [], 1
-    for aug in val_aug.spatial:
-        kwargs_list = aug.get('kwargs', {})
-        if not isinstance(kwargs_list, list):
-            kwargs_list = [kwargs_list]
-        cur_choices = [getattr(spatial_transforms, aug.type)(**kwargs) for kwargs in kwargs_list]
-        transform_choices.append(cur_choices)
-        total_choices *= len(cur_choices)
-
-    spatial_transform = []
-    for choice_idx in range(total_choices):
-        idx, transform = choice_idx, []
-        for cur_choices in transform_choices:
-            n_choices = len(cur_choices)
-            cur_idx = idx % n_choices
-            transform.append(cur_choices[cur_idx])
-            idx = idx // n_choices
-        spatial_transform.append(spatial_transforms.Compose(transform))
-
-    temporal_transform = getattr(temporal_transforms, val_aug.temporal.type)(**val_aug.temporal.get('kwargs', {}))
-
-    val_data = ava.AVAmulticrop(
-        opt.val.root_path,
-        opt.val.annotation_path,
-        spatial_transform,
-        temporal_transform
-    )
-
-    val_sampler = DistributedSampler(val_data, round_down=False)
-
-    val_loader = ava.AVAmulticropDataLoader(
-        val_data,
-        batch_size=opt.val.batch_size,
-        shuffle=False,
-        num_workers=opt.val.get('workers', 1),
-        pin_memory=True,
-        sampler=val_sampler
-    )
-
-    val_logger = None
-    if rank == 0:
-        logger.info('# val data: {}'.format(len(val_data)))
-        logger.info('val spatial aug: {}'.format(spatial_transform))
-        logger.info('val temporal aug: {}'.format(temporal_transform))
-
-        val_log_items = ['epoch']
-        if opt.val.with_label:
-            val_log_items.append('loss')
-        if opt.val.get('eval_mAP', None) is not None:
-            val_log_items.append('mAP')
-        if len(val_log_items) > 1:
-            val_logger = Logger(
-                os.path.join(opt.result_path, 'val.log'),
-                val_log_items)
-
-    if opt.get('pretrain', None) is not None:
-        load_pretrain(opt.pretrain, net)
-
-    begin_epoch = 1
-    if opt.get('resume_path', None) is not None:
-        if not os.path.isfile(opt.resume_path):
-            opt.resume_path = os.path.join(opt.result_path, opt.resume_path)
-        checkpoint = torch.load(opt.resume_path, map_location=lambda storage, loc: storage.cuda())
-
-        begin_epoch = checkpoint['epoch'] + 1
-        net.load_state_dict(checkpoint['state_dict'])
-        if rank == 0:
-            logger.info('Resumed from checkpoint {}'.format(opt.resume_path))
-
-        if not opt.get('evaluate', False):
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            scheduler.load_state_dict(checkpoint['scheduler'])
-            if rank == 0:
-                logger.info('Also loaded optimizer and scheduler from checkpoint {}'.format(opt.resume_path))
-
-    criterion, act_func = getattr(losses, opt.loss.type)(**opt.loss.get('kwargs', {}))
-
-    if opt.get('evaluate', False):  # evaluation mode
-        val_epoch(begin_epoch - 1, val_loader, net, criterion, act_func,
-                  opt, logger, val_logger, rank, world_size, writer)
-    else:  # training and validation mode
-        for e in range(begin_epoch, opt.train.n_epochs + 1):
-            train_sampler.set_epoch(e)
-            train_epoch(e, train_loader, net, criterion, optimizer, scheduler,
-                        opt, logger, train_logger, train_batch_logger, rank, world_size, writer)
-
-            if e % opt.train.val_freq == 0:
-                val_epoch(e, val_loader, net, criterion, act_func,
-                          opt, logger, val_logger, rank, world_size, writer)
-
-    if rank == 0:
-        writer.close()
-
-
-def train_epoch(epoch, data_loader, model, criterion, optimizer, scheduler, 
-                opt, logger, epoch_logger, batch_logger, rank, world_size, writer):
-    if rank == 0:
-        logger.info('Training at epoch {}'.format(epoch))
-
-    model.train()
-
-    batch_time = AverageMeter(opt.print_freq)
-    data_time = AverageMeter(opt.print_freq)
-    loss_time = AverageMeter(opt.print_freq)
-    losses = AverageMeter(opt.print_freq)
-    global_losses = AverageMeter()
-
-    end_time = time.time()
-    for i, data in enumerate(data_loader):
-        data_time.update(time.time() - end_time)
-
-        curr_step = (epoch - 1) * len(data_loader) + i
-        scheduler.step(curr_step)
-
-        ret = model(data)
-        num_rois = ret['num_rois']
-        outputs = ret['outputs']
-        targets = ret['targets']
-
-        tot_rois = torch.Tensor([num_rois]).cuda()
-        dist.all_reduce(tot_rois)
-        tot_rois = tot_rois.item()
-
-        if tot_rois == 0:
-            end_time = time.time()
-            continue
-
-        optimizer.zero_grad()
-
-        if num_rois > 0:
-            loss = criterion(outputs, targets)
-            loss = loss * num_rois / tot_rois * world_size
-        else:
-            loss = torch.tensor(0).float().cuda()
-            for param in model.parameters():
-                if param.requires_grad:
-                    loss = loss + param.sum()
-            loss = 0. * loss
-
-        loss.backward()
-        optimizer.step()
-
-        reduced_loss = loss.clone()
-        dist.all_reduce(reduced_loss)
-        losses.update(reduced_loss.item(), tot_rois)
-        global_losses.update(reduced_loss.item(), tot_rois)
-
-        batch_time.update(time.time() - end_time)
-        end_time = time.time()
-
-        if (i + 1) % opt.print_freq == 0 and rank == 0:
-            writer.add_scalar('train/loss', losses.avg, curr_step + 1)
-            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], curr_step + 1)
-
-            batch_logger.log({
-                'epoch': epoch,
-                'batch': i + 1,
-                'iter': curr_step + 1,
-                'loss': losses.avg,
-                'lr': optimizer.param_groups[0]['lr']
-            })
-
-            logger.info('Epoch [{0}]\t'
-                        'Iter [{1}/{2}]\t'
-                        'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                        'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                        'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(
-                            epoch,
-                            i + 1,
-                            len(data_loader),
-                            batch_time=batch_time,
-                            data_time=data_time,
-                            loss=losses))
-
-    if rank == 0:
-        writer.add_scalar('train/epoch_loss', global_losses.avg, epoch)
-        writer.flush()
-
-        epoch_logger.log({
-            'epoch': epoch,
-            'loss': global_losses.avg,
-            'lr': optimizer.param_groups[0]['lr']
-        })
-
-        logger.info('-' * 100)
-        logger.info(
-            'Epoch [{}/{}]\t'
-            'Loss {:.4f}'.format(
-                epoch,
-                opt.train.n_epochs,
-                global_losses.avg))
-
-        if epoch % opt.train.save_freq == 0:
-            save_file_path = os.path.join(opt.result_path, 'ckpt_{}.pth.tar'.format(epoch))
-            states = {
-                'epoch': epoch,
-                'state_dict': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict()
-            }
-            torch.save(states, save_file_path)
-            logger.info('Checkpoint saved to {}'.format(save_file_path))
-
-        logger.info('-' * 100)
-
-
-def val_epoch(epoch, data_loader, model, criterion, act_func,
-              opt, logger, epoch_logger, rank, world_size, writer):
-    if rank == 0:
-        logger.info('Evaluation at epoch {}'.format(epoch))
-
-    model.eval()
-
-    calc_loss = opt.val.with_label
-    out_file = open(os.path.join(opt.result_path, 'tmp', 'predict_rank%d.csv'%rank), 'w')
-
-    batch_time = AverageMeter(opt.print_freq)
-    data_time = AverageMeter(opt.print_freq)
-    if calc_loss:
-        global_losses = AverageMeter()
-
-    end_time = time.time()
-    for i, data in enumerate(data_loader):  
-        data_time.update(time.time() - end_time)
-
-        with torch.no_grad():
-            ret = model(data, evaluate=True)
-            num_rois = ret['num_rois']
-            outputs = ret['outputs']
-            targets = ret['targets']
-        if num_rois == 0:
-            end_time = time.time()
-            continue
-
-        if calc_loss:
-            loss = criterion(outputs, targets)
-            global_losses.update(loss.item(), num_rois)
-
-        fnames, mid_times, bboxes = ret['filenames'], ret['mid_times'], ret['bboxes']
-        outputs = act_func(outputs).cpu().data
-        idx_to_class = data_loader.dataset.idx_to_class
-        for k in range(num_rois):
-            prefix = "%s,%s,%.3f,%.3f,%.3f,%.3f"%(fnames[k], mid_times[k],
-                                                    bboxes[k][0], bboxes[k][1],
-                                                    bboxes[k][2], bboxes[k][3])
-            for cls in range(outputs.shape[1]):
-                score_str = '%.3f'%outputs[k][cls]
-                out_file.write(prefix + ",%d,%s\n" % (idx_to_class[cls]['id'], score_str))
-
-        batch_time.update(time.time() - end_time)
-        end_time = time.time()
-
-        if (i + 1) % opt.print_freq == 0 and rank == 0:
-            logger.info('Epoch [{0}]\t'
-                        'Iter [{1}/{2}]\t'
-                        'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                        'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'.format(
-                            epoch,
-                            i + 1,
-                            len(data_loader),
-                            batch_time=batch_time,
-                            data_time=data_time))
-
-    if calc_loss:
-        total_num = torch.Tensor([global_losses.count]).cuda()
-        loss_sum = torch.Tensor([global_losses.avg * global_losses.count]).cuda()
-        dist.all_reduce(total_num)
-        dist.all_reduce(loss_sum)
-        final_loss = loss_sum.item() / (total_num.item() + 1e-10)
-
-    out_file.close()
-    dist.barrier()
-
-    if rank == 0:
-        val_log = {'epoch': epoch}
-        val_str = 'Epoch [{}]'.format(epoch)
-
-        if calc_loss:
-            writer.add_scalar('val/epoch_loss', final_loss, epoch)
-            val_log['loss'] = final_loss
-            val_str += '\tLoss {:.4f}'.format(final_loss)
-
-        result_file = os.path.join(opt.result_path, 'predict_epoch%d.csv'%epoch)
-        with open(result_file, 'w') as of:
-            for r in range(world_size):
-                with open(os.path.join(opt.result_path, 'tmp', 'predict_rank%d.csv'%r), 'r') as f:
-                    of.writelines(f.readlines())
-
-        if opt.val.get('eval_mAP', None) is not None:
-            eval_mAP = opt.val.eval_mAP
-            metrics = run_evaluation(
-                open(eval_mAP.labelmap, 'r'), 
-                open(eval_mAP.groundtruth, 'r'),
-                open(result_file, 'r'),
-                open(eval_mAP.exclusions, 'r') if eval_mAP.get('exclusions', None) is not None else None, 
-                logger
-            )
-
-            mAP = metrics['PascalBoxes_Precision/mAP@0.5IOU']
-            writer.add_scalar('val/mAP', mAP, epoch)
-            val_log['mAP'] = mAP
-            val_str += '\tmAP {:.6f}'.format(mAP)
-
-        writer.flush()
-
-        if epoch_logger is not None:
-            epoch_logger.log(val_log)
-
-            logger.info('-' * 100)
-            logger.info(val_str)
-            logger.info('-' * 100)
-
-    dist.barrier()
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='PyTorch AVA Training and Evaluation')
-    parser.add_argument('--config', type=str, required=True)
-    parser.add_argument('--nproc_per_node', type=int, default=8)
-    parser.add_argument('--backend', type=str, default='nccl')
-    parser.add_argument('--master_addr', type=str, default=socket.gethostbyname(socket.gethostname()))
-    parser.add_argument('--master_port', type=int, default=31114)
-    parser.add_argument('--nnodes', type=int, default=None)
-    parser.add_argument('--node_rank', type=int, default=None)
+import argparse
+import numpy as np
+from modules import utils
+from train import train
+from data import VideoDataset
+from torchvision import transforms
+import data.transforms as vtf
+from models.retinanet import build_retinanet
+from gen_dets import gen_dets, eval_framewise_dets
+from tubes import build_eval_tubes
+from val import val
+
+def str2bool(v):
+    return v.lower() in ("yes", "true", "t", "1")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Training single stage FPN with OHEM, resnet as backbone')
+    parser.add_argument('DATA_ROOT', help='Location to root directory for dataset reading') # /mnt/mars-fast/datasets/
+    parser.add_argument('SAVE_ROOT', help='Location to root directory for saving checkpoint models') # /mnt/mars-alpha/
+    parser.add_argument('MODEL_PATH',help='Location to root directory where kinetics pretrained models are stored')
+    
+    parser.add_argument('--MODE', default='train',
+                        help='MODE can be train, gen_dets, eval_frames, eval_tubes define SUBSETS accordingly, build tubes')
+    # Name of backbone network, e.g. resnet18, resnet34, resnet50, resnet101 resnet152 are supported
+    parser.add_argument('--ARCH', default='resnet50', 
+                        type=str, help=' base arch')
+    parser.add_argument('--MODEL_TYPE', default='I3D',
+                        type=str, help=' base model')
+    parser.add_argument('--ANCHOR_TYPE', default='RETINA',
+                        type=str, help='type of anchors to be used in model')
+    
+    parser.add_argument('--SEQ_LEN', default=8,
+                        type=int, help='NUmber of input frames')
+    parser.add_argument('--TEST_SEQ_LEN', default=8,
+                        type=int, help='NUmber of input frames')
+    parser.add_argument('--MIN_SEQ_STEP', default=1,
+                        type=int, help='DIFFERENCE of gap between the frames of sequence')
+    parser.add_argument('--MAX_SEQ_STEP', default=1,
+                        type=int, help='DIFFERENCE of gap between the frames of sequence')
+    # if output heads are have shared features or not: 0 is no-shareing else sharining enabled
+    # parser.add_argument('--MULIT_SCALE', default=False, type=str2bool,help='perfrom multiscale training')
+    parser.add_argument('--HEAD_LAYERS', default=3, 
+                        type=int,help='0 mean no shareding more than 0 means shareing')
+    parser.add_argument('--NUM_FEATURE_MAPS', default=5, 
+                        type=int,help='0 mean no shareding more than 0 means shareing')
+    parser.add_argument('--CLS_HEAD_TIME_SIZE', default=3, 
+                        type=int, help='Temporal kernel size of classification head')
+    parser.add_argument('--REG_HEAD_TIME_SIZE', default=3,
+                    type=int, help='Temporal kernel size of regression head')
+    
+    #  Name of the dataset only voc or coco are supported
+    parser.add_argument('--DATASET', default='road', 
+                        type=str,help='dataset being used')
+    parser.add_argument('--TRAIN_SUBSETS', default='train_3,', 
+                        type=str,help='Training SUBSETS seprated by ,')
+    parser.add_argument('--VAL_SUBSETS', default='', 
+                        type=str,help='Validation SUBSETS seprated by ,')
+    parser.add_argument('--TEST_SUBSETS', default='', 
+                        type=str,help='Testing SUBSETS seprated by ,')
+    # Input size of image only 600 is supprted at the moment 
+    parser.add_argument('--MIN_SIZE', default=512, 
+                        type=int, help='Input Size for FPN')
+    
+    #  data loading argumnets
+    parser.add_argument('-b','--BATCH_SIZE', default=4, 
+                        type=int, help='Batch size for training')
+    parser.add_argument('--TEST_BATCH_SIZE', default=1, 
+                        type=int, help='Batch size for testing')
+    # Number of worker to load data in parllel
+    parser.add_argument('--NUM_WORKERS', '-j', default=8, 
+                        type=int, help='Number of workers used in dataloading')
+    # optimiser hyperparameters
+    parser.add_argument('--OPTIM', default='SGD', 
+                        type=str, help='Optimiser type')
+    parser.add_argument('--RESUME', default=0, 
+                        type=int, help='Resume from given epoch')
+    parser.add_argument('--MAX_EPOCHS', default=30, 
+                        type=int, help='Number of training epoc')
+    parser.add_argument('-l','--LR', '--learning-rate', 
+                        default=0.004225, type=float, help='initial learning rate')
+    parser.add_argument('--MOMENTUM', default=0.9, 
+                        type=float, help='momentum')
+    parser.add_argument('--MILESTONES', default='20,25', 
+                        type=str, help='Chnage the lr @')
+    parser.add_argument('--GAMMA', default=0.1, 
+                        type=float, help='Gamma update for SGD')
+    parser.add_argument('--WEIGHT_DECAY', default=1e-4, 
+                        type=float, help='Weight decay for SGD')
+    
+    # Freeze layers or not 
+    parser.add_argument('--FBN','--FREEZE_BN', default=True, 
+                        type=str2bool, help='freeze bn layers if true or else keep updating bn layers')
+    parser.add_argument('--FREEZE_UPTO', default=1, 
+                        type=int, help='layer group number in ResNet up to which needs to be frozen')
+    
+    # Loss function matching threshold
+    parser.add_argument('--POSTIVE_THRESHOLD', default=0.5, 
+                        type=float, help='Min threshold for Jaccard index for matching')
+    parser.add_argument('--NEGTIVE_THRESHOLD', default=0.4,
+                        type=float, help='Max threshold Jaccard index for matching')
+    # Evaluation hyperparameters
+    parser.add_argument('--EVAL_EPOCHS', default='30', 
+                        type=str, help='eval epochs to test network on these epoch checkpoints usually the last epoch is used')
+    parser.add_argument('--VAL_STEP', default=2, 
+                        type=int, help='Number of training epoch before evaluation')
+    parser.add_argument('--IOU_THRESH', default=0.5, 
+                        type=float, help='Evaluation threshold for validation and for frame-wise mAP')
+    parser.add_argument('--CONF_THRESH', default=0.025, 
+                        type=float, help='Confidence threshold for to remove detection below given number')
+    parser.add_argument('--NMS_THRESH', default=0.5, 
+                        type=float, help='NMS threshold to apply nms at the time of validation')
+    parser.add_argument('--TOPK', default=10, 
+                        type=int, help='topk detection to keep for evaluation')
+    parser.add_argument('--GEN_CONF_THRESH', default=0.025, 
+                        type=float, help='Confidence threshold at the time of generation and dumping')
+    parser.add_argument('--GEN_TOPK', default=100, 
+                        type=int, help='topk at the time of generation')
+    parser.add_argument('--GEN_NMS', default=0.5, 
+                        type=float, help='NMS at the time of generation')
+    parser.add_argument('--CLASSWISE_NMS', default=False, 
+                        type=str2bool, help='apply classwise NMS/no tested properly')
+    parser.add_argument('--JOINT_4M_MARGINALS', default=False, 
+                        type=str2bool, help='generate score of joints i.e. duplexes or triplet by marginals like agents and actions scores')
+    
+    ## paths hyper parameters
+    parser.add_argument('--COMPUTE_PATHS', default=False, 
+                        type=str2bool, help=' COMPUTE_PATHS if set true then it overwrite existing ones')
+    parser.add_argument('--PATHS_IOUTH', default=0.5,
+                        type=float, help='Iou threshold for building paths to limit neighborhood search')
+    parser.add_argument('--PATHS_COST_TYPE', default='score',
+                        type=str, help='cost function type to use for matching, other options are scoreiou, iou')
+    parser.add_argument('--PATHS_JUMP_GAP', default=4,
+                        type=int, help='GAP allowed for a tube to be kept alive after no matching detection found')
+    parser.add_argument('--PATHS_MIN_LEN', default=6,
+                        type=int, help='minimum length of generated path')
+    parser.add_argument('--PATHS_MINSCORE', default=0.1,
+                        type=float, help='minimum score a path should have over its length')
+    
+    ## paths hyper parameters
+    parser.add_argument('--COMPUTE_TUBES', default=False, type=str2bool, help='if set true then it overwrite existing tubes')
+    parser.add_argument('--TUBES_ALPHA', default=0,
+                        type=float, help='alpha cost for changeing the label')
+    parser.add_argument('--TRIM_METHOD', default='none',
+                        type=str, help='other one is indiv which works for UCF24')
+    parser.add_argument('--TUBES_TOPK', default=10,
+                        type=int, help='Number of labels to assign for a tube')
+    parser.add_argument('--TUBES_MINLEN', default=5,
+                        type=int, help='minimum length of a tube')
+    parser.add_argument('--TUBES_EVAL_THRESHS', default='0.2,0.5',
+                        type=str, help='evaluation threshold for checking tube overlap at evaluation time, one can provide as many as one wants')
+    # parser.add_argument('--TRAIL_ID', default=0,
+    #                     type=int, help='eval TUBES_Thtrshold at evaluation time')
+    
+    ###
+    parser.add_argument('--LOG_START', default=10, 
+                        type=int, help='start loging after k steps for text/tensorboard') 
+    parser.add_argument('--LOG_STEP', default=10, 
+                        type=int, help='Log every k steps for text/tensorboard')
+    parser.add_argument('--TENSORBOARD', default=1,
+                        type=str2bool, help='Use tensorboard for loss/evalaution visualization')
+
+    # Program arguments
+    parser.add_argument('--MAN_SEED', default=123, 
+                        type=int, help='manualseed for reproduction')
+    parser.add_argument('--MULTI_GPUS', default=True, type=str2bool, help='If  more than 0 then use all visible GPUs by default only one GPU used ') 
+
+    # Use CUDA_VISIBLE_DEVICES=0,1,4,6 to select GPUs to use
+
+
+    ## Parse arguments
     args = parser.parse_args()
 
-    torch.multiprocessing.spawn(main, args=(args,), nprocs=args.nproc_per_node)
+    args = utils.set_args(args) # set directories and SUBSETS fo datasets
+    args.MULTI_GPUS = False if args.BATCH_SIZE == 1 else args.MULTI_GPUS
+    ## set random seeds and global settings
+    np.random.seed(args.MAN_SEED)
+    torch.manual_seed(args.MAN_SEED)
+    # torch.cuda.manual_seed_all(args.MAN_SEED)
+    torch.set_default_tensor_type('torch.FloatTensor')
+
+    args = utils.create_exp_name(args)
+
+    utils.setup_logger(args)
+    logger = utils.get_logger(__name__)
+    logger.info(sys.version)
+
+    assert args.MODE in ['train','val','gen_dets','eval_frames', 'eval_tubes'], 'MODE must be from ' + ','.join(['train','test','tubes'])
+
+    if args.MODE == 'train':
+        args.TEST_SEQ_LEN = args.SEQ_LEN
+    else:
+        args.SEQ_LEN = args.TEST_SEQ_LEN
+
+    if args.MODE in ['train','val']:
+        # args.CONF_THRESH = 0.05
+        args.SUBSETS = args.TRAIN_SUBSETS
+        train_transform = transforms.Compose([
+                            vtf.ResizeClip(args.MIN_SIZE, args.MAX_SIZE),
+                            vtf.ToTensorStack(),
+                            vtf.Normalize(mean=args.MEANS, std=args.STDS)])
+        
+        # train_skip_step = args.SEQ_LEN
+        # if args.SEQ_LEN>4 and args.SEQ_LEN<=10:
+        #     train_skip_step = args.SEQ_LEN-2
+        if args.SEQ_LEN>10:
+            train_skip_step = args.SEQ_LEN + (args.MAX_SEQ_STEP - 1) * 2 - 2
+        else:
+            train_skip_step = args.SEQ_LEN 
+
+        train_dataset = VideoDataset(args, train=True, skip_step=train_skip_step, transform=train_transform)
+        logger.info('Done Loading Dataset Train Dataset')
+        ## For validation set
+        full_test = False
+        args.SUBSETS = args.VAL_SUBSETS
+        skip_step = args.SEQ_LEN*8
+    else:
+        args.SEQ_LEN = args.TEST_SEQ_LEN
+        args.MAX_SEQ_STEP = 1
+        args.SUBSETS = args.TEST_SUBSETS
+        full_test = True #args.MODE != 'train'
+        args.skip_beggning = 0
+        args.skip_ending = 0
+        if args.MODEL_TYPE == 'I3D':
+            args.skip_beggning = 2
+            args.skip_ending = 2
+        elif args.MODEL_TYPE != 'C2D':
+            args.skip_beggning = 2
+
+        skip_step = args.SEQ_LEN - args.skip_beggning
+
+
+    val_transform = transforms.Compose([ 
+                        vtf.ResizeClip(args.MIN_SIZE, args.MAX_SIZE),
+                        vtf.ToTensorStack(),
+                        vtf.Normalize(mean=args.MEANS,std=args.STDS)])
+    
+
+    val_dataset = VideoDataset(args, train=False, transform=val_transform, skip_step=skip_step, full_test=full_test)
+    logger.info('Done Loading Dataset Validation Dataset')
+
+    args.num_classes =  val_dataset.num_classes
+    # one for objectness
+    args.label_types = val_dataset.label_types
+    args.num_label_types = val_dataset.num_label_types
+    args.all_classes =  val_dataset.all_classes
+    args.num_classes_list = val_dataset.num_classes_list
+    args.num_ego_classes = val_dataset.num_ego_classes
+    args.ego_classes = val_dataset.ego_classes
+    args.head_size = 256
+
+    if args.MODE in ['train', 'val','gen_dets']:
+        net = build_retinanet(args).cuda()
+        if args.MULTI_GPUS:
+            logger.info('\nLets do dataparallel\n')
+            net = torch.nn.DataParallel(net)
+
+    for arg in sorted(vars(args)):
+        logger.info(str(arg)+': '+str(getattr(args, arg)))
+    
+    if args.MODE == 'train':
+        if args.FBN:
+            if args.MULTI_GPUS:
+                net.module.backbone.apply(utils.set_bn_eval)
+            else:
+                net.backbone.apply(utils.set_bn_eval)
+        train(args, net, train_dataset, val_dataset)
+    # elif args.MODE == 'val':
+    #     val(args, net, val_dataset)
+    # elif args.MODE == 'gen_dets':
+    #     gen_dets(args, net, val_dataset)
+    #     eval_framewise_dets(args, val_dataset)
+    #     build_eval_tubes(args, val_dataset)
+    # elif args.MODE == 'eval_frames':
+    #     eval_framewise_dets(args, val_dataset)
+    # elif args.MODE == 'eval_tubes':
+    #     build_eval_tubes(args, val_dataset)
+    
+
+if __name__ == "__main__":
+    main()
