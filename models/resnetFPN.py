@@ -193,11 +193,11 @@ class ResNetFPN(nn.Module):
         p6 = self.conv6(c5)
         p7 = self.conv7(F.relu(p6))
 
-        p3 = ff[1]
-        p4 = ff[1]
-        p5 = ff[1]
-        p6 = ff[1]
-        p7 = ff[1]
+        # p3 = ff[1]
+        # p4 = ff[1]
+        # p5 = ff[1]
+        # p6 = ff[1]
+        # p7 = ff[1]
         
 
         print('p3',p3.shape)
