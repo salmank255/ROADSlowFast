@@ -108,6 +108,9 @@ def run_train(args, train_data_loader, net, optimizer, epoch, iteration):
         optimizer.zero_grad()
         # pdb.set_trace()
         loss_l, loss_c = net(images, gt_boxes, gt_labels, ego_labels, counts, img_indexs)
+        print(loss_l.shape)
+        print(loss_c.shape)
+        
         break
     #     loss_l, loss_c = loss_l.mean(), loss_c.mean()
     #     loss = loss_l + loss_c

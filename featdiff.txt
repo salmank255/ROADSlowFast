@@ -1,0 +1,14 @@
+p3 torch.Size([1, 256, 8, 32, 44])
+p4 torch.Size([1, 256, 8, 32, 44])
+p5 torch.Size([1, 256, 8, 32, 44])
+p6 torch.Size([1, 256, 8, 32, 44])
+p7 torch.Size([1, 256, 8, 32, 44])
+
+
+
+
+p3 torch.Size([1, 256, 4, 64, 88])
+p4 torch.Size([1, 256, 4, 32, 44])
+p5 torch.Size([1, 256, 4, 16, 22])
+p6 torch.Size([1, 256, 4, 8, 11])
+p7 torch.Size([1, 256, 4, 4, 6])

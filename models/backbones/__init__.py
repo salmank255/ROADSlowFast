@@ -13,8 +13,8 @@ class AVA_backbone(nn.Module):
         super(AVA_backbone, self).__init__()
         
         self.config = config
-        self.module = model_entry(config)
-        
+        self.module = model_entry(config.model.backbone)
+        print(config.get('pretrain', None))
         if config.get('pretrain', None) is not None:
             load_pretrain(config.pretrain, self.module)
                 
@@ -24,7 +24,8 @@ class AVA_backbone(nn.Module):
     # data: clips
     # returns: features
     def forward(self, data):
-        inputs = data['clips']
+        # inputs = data['clips']
+        inputs = data
         inputs = inputs.cuda()
         features = self.module(inputs)
-        return {'features': features}
+        return features

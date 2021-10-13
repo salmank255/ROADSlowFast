@@ -6,6 +6,11 @@ from torch.nn.parameter import Parameter
 from models.nonlocal_helper import Nonlocal
 from models.blocks import *
 
+import yaml
+from easydict import EasyDict
+
+from .backbones import AVA_backbone
+
 import modules.utils as lutils
 
 logger = lutils.get_logger(__name__)
@@ -24,8 +29,15 @@ def conv1x1(in_channel, out_channel):
 class ResNetFPN(nn.Module):
 
     def __init__(self, block, args):
+
+        with open('configs/ROAD.yml') as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+        opt = EasyDict(config)
+        print(opt)
         self.inplanes = 64
         super(ResNetFPN, self).__init__()
+        self.backbone = AVA_backbone(opt)
+        
         self.MODEL_TYPE = args.MODEL_TYPE
         num_blocks = args.model_perms
         non_local_inds = args.non_local_inds
@@ -140,17 +152,24 @@ class ResNetFPN(nn.Module):
 
     def forward(self, x):
         # pdb.set_trace()
-        # print('input shape', x.shape)
+        print('input shape', x.shape)
+        ff = self.backbone(x)
+        print(ff[0].shape)
+        print(ff[1].shape)
+        
         x = self.conv1(x)
+        
         x = self.bn1(x)
         x = self.relu(x)
         x = self.pool1(x)
-        # print('p1 ', x.shape)
+        
         x = self.layer1(x)
+        
         if self.pool2 is not None:
             x = self.pool2(x)
         # print('p2 shape ', x.shape)
         c3 = self.layer2(x)
+        print('p1x ', c3.shape)
         c4 = self.layer3(c3)
         c5 = self.layer4(c4)
 
@@ -174,12 +193,19 @@ class ResNetFPN(nn.Module):
         p6 = self.conv6(c5)
         p7 = self.conv7(F.relu(p6))
 
+        p3 = ff[1]
+        p4 = ff[1]
+        p5 = ff[1]
+        p6 = ff[1]
+        p7 = ff[1]
+        
+
         print('p3',p3.shape)
         print('p4',p4.shape)
         print('p5',p5.shape)
         print('p6',p6.shape)
         print('p7',p7.shape)
-        
+        # print(stop)
         
 
         features = [p3, p4, p5, p6, p7]
@@ -190,7 +216,7 @@ class ResNetFPN(nn.Module):
                 features[i] = self._upsample_time(features[i])
             ego_feat = self._upsample_time(ego_feat)
         # print(features.shape)
-        # print(ego_feat.shape)
+        print(ego_feat.shape)
         return features, ego_feat
 
 
@@ -284,6 +310,8 @@ class ResNetFPN(nn.Module):
                 logger.info('NAME IS NOT INPUT STATE DICT::>' + state_name)
 
 def resnetfpn(args):
+
+
     model_type = args.MODEL_TYPE
     if model_type.startswith('I3D'):
         return ResNetFPN(BottleneckI3D, args)

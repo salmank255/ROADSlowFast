@@ -193,16 +193,16 @@ def load_pretrain(pretrain_opt, net):
                 checkpoint[new_k] = checkpoint.pop(k)
     net.load_state_dict(checkpoint, strict=False)
 
-    if get_rank() == 0:
-        ckpt_keys = set(checkpoint.keys())
-        own_keys = set(net.state_dict().keys())
-        missing_keys = own_keys - ckpt_keys
-        ignore_keys = ckpt_keys - own_keys
-        loaded_keys = own_keys - missing_keys
+    # if get_rank() == 0:
+    #     ckpt_keys = set(checkpoint.keys())
+    #     own_keys = set(net.state_dict().keys())
+    #     missing_keys = own_keys - ckpt_keys
+    #     ignore_keys = ckpt_keys - own_keys
+    #     loaded_keys = own_keys - missing_keys
 
-        logger = get_logger()
-        for k in missing_keys:
-            logger.info('Caution: missing key {}'.format(k))
-        for k in ignore_keys:
-            logger.info('Caution: redundant key {}'.format(k))
-        logger.info('Loaded {} key(s) from pre-trained model at {}'.format(len(loaded_keys), pretrain_opt.path))
+    #     logger = get_logger()
+    #     for k in missing_keys:
+    #         logger.info('Caution: missing key {}'.format(k))
+    #     for k in ignore_keys:
+    #         logger.info('Caution: redundant key {}'.format(k))
+    #     logger.info('Loaded {} key(s) from pre-trained model at {}'.format(len(loaded_keys), pretrain_opt.path))
