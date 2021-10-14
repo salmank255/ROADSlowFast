@@ -36,6 +36,7 @@ class Bottleneck(nn.Module):
         if downsample is not None:
             self.downsample_bn = BN(planes * 4)
         self.stride = stride
+        self.alpha = 1
 
     def forward(self, x):
         res = x
@@ -64,7 +65,7 @@ class SlowFast(nn.Module):
     def __init__(self, block, layers, alpha=8, beta=0.125, fuse_only_conv=True, fuse_kernel_size=5, slow_full_span=False):
         super(SlowFast, self).__init__()
         
-        self.alpha = alpha
+        self.alpha = 1
         self.beta = beta
         self.slow_full_span = slow_full_span
 
@@ -92,6 +93,8 @@ class SlowFast(nn.Module):
         self.slow_res3 = self._make_layer_slow(block, 256, layers[2], stride=2, head_conv=3)
         self.slow_res4 = self._make_layer_slow(block, 512, layers[3], head_conv=3, dilation=2)
 
+        
+
         '''Lateral Connections'''
         fuse_padding = fuse_kernel_size // 2
         fuse_kwargs = {'kernel_size': (fuse_kernel_size, 1, 1), 'stride': (alpha, 1, 1), 'padding': (fuse_padding, 0, 0), 'bias': False}
@@ -109,9 +112,18 @@ class SlowFast(nn.Module):
         self.Tconv2 = fuse_func(int(256 * beta), int(512 * beta))
         self.Tconv3 = fuse_func(int(512 * beta), int(1024 * beta))
         self.Tconv4 = fuse_func(int(1024 * beta), int(2048 * beta))
+        # for input in []:
+        # self.slow_conv1_1 =  nn.Conv3d(3, self.fast_inplanes, kernel_size=(5, 7, 7), stride=(1, 2, 2), padding=(2, 3, 3), bias=False)
+        
 
     def forward(self, input):
         fast, Tc = self.FastPath(input)
+        print('alpha',self.alpha)
+        for item in Tc:
+            print(item.shape)
+        for item in fast:
+            print(item.shape)
+        
         if self.slow_full_span:
             slow_input = torch.index_select(
                 input,
@@ -125,22 +137,28 @@ class SlowFast(nn.Module):
         else:
             slow_input = input[:, :, ::self.alpha, :, :]
         slow = self.SlowPath(slow_input, Tc)
+        for item in slow:
+            print(item.shape)
+
         return [slow, fast]
 
     def SlowPath(self, input, Tc):
+        # print('slowinpdi',input.shape)
         x = self.slow_conv1(input)
         x = self.slow_bn1(x)
         x = self.slow_relu(x)
         x = self.slow_maxpool(x)
+        # print('x',x.shape)
         x = torch.cat([x, Tc[0]], dim=1)
         x = self.slow_res1(x)
         x = torch.cat([x, Tc[1]], dim=1)
-        x = self.slow_res2(x)
-        x = torch.cat([x, Tc[2]], dim=1)
-        x = self.slow_res3(x)
-        x = torch.cat([x, Tc[3]], dim=1)
-        x = self.slow_res4(x)
-        return x
+        c3 = self.slow_res2(x)
+        x = torch.cat([c3, Tc[2]], dim=1)
+        c4 = self.slow_res3(x)
+        x = torch.cat([c4, Tc[3]], dim=1)
+        c5 = self.slow_res4(x)
+
+        return [c3,c4,c5]
 
     def FastPath(self, input):
         x = self.fast_conv1(input)
@@ -150,12 +168,12 @@ class SlowFast(nn.Module):
         Tc1 = self.Tconv1(x)
         x = self.fast_res1(x)
         Tc2 = self.Tconv2(x)
-        x = self.fast_res2(x)
-        Tc3 = self.Tconv3(x)
-        x = self.fast_res3(x)
-        Tc4 = self.Tconv4(x)
-        x = self.fast_res4(x)
-        return x, [Tc1, Tc2, Tc3, Tc4]
+        c3 = self.fast_res2(x)
+        Tc3 = self.Tconv3(c3)
+        c4 = self.fast_res3(c3)
+        Tc4 = self.Tconv4(c4)
+        c5 = self.fast_res4(c4)
+        return [c3,c4,c5], [Tc1, Tc2, Tc3, Tc4]
 
     def _make_layer_fast(self, block, planes, blocks, stride=1, head_conv=1, dilation=1):
         downsample = None

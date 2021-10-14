@@ -152,7 +152,7 @@ class ResNetFPN(nn.Module):
 
     def forward(self, x):
         # pdb.set_trace()
-        print('input shape', x.shape)
+        # print('input shape', x.shape)
         ff = self.backbone(x)
         print(ff[0].shape)
         print(ff[1].shape)
@@ -199,17 +199,17 @@ class ResNetFPN(nn.Module):
         # p6 = self.pool2(ff[1])
         # p7 = self.pool2(ff[1])
         
-        print('f0',ff[0].shape)
+        # print('f0',ff[0].shape)
         
-        print('slow',ff[0].shape)
-        print('fast',ff[1].shape)
+        # print('slow',ff[0].shape)
+        # print('fast',ff[1].shape)
         
 
-        print('p3',p3.shape)
-        print('p4',p4.shape)
-        print('p5',p5.shape)
-        print('p6',p6.shape)
-        print('p7',p7.shape)
+        # print('p3',p3.shape)
+        # print('p4',p4.shape)
+        # print('p5',p5.shape)
+        # print('p6',p6.shape)
+        # print('p7',p7.shape)
         # print(stop)
         
 
