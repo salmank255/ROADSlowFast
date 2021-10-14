@@ -193,13 +193,16 @@ class ResNetFPN(nn.Module):
         p6 = self.conv6(c5)
         p7 = self.conv7(F.relu(p6))
 
-        p3 = self.pool2(ff[0])
-        p4 = self.pool2(ff[1])
-        p5 = self.pool2(ff[1])
-        p6 = self.pool2(ff[1])
-        p7 = self.pool2(ff[1])
+        # p3 = self.pool2(ff[0])
+        # p4 = self.pool2(ff[1])
+        # p5 = self.pool2(ff[1])
+        # p6 = self.pool2(ff[1])
+        # p7 = self.pool2(ff[1])
         
         print('f0',ff[0].shape)
+        
+        print('slow',ff[0].shape)
+        print('fast',ff[1].shape)
         
 
         print('p3',p3.shape)

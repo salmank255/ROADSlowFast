@@ -112,19 +112,19 @@ class SlowFast(nn.Module):
 
     def forward(self, input):
         fast, Tc = self.FastPath(input)
-        # if self.slow_full_span:
-        #     slow_input = torch.index_select(
-        #         input,
-        #         2,
-        #         torch.linspace(
-        #             0,
-        #             input.shape[2] - 1,
-        #             input.shape[2] // self.alpha,
-        #         ).long().cuda(),
-        #     )
-        # else:
-        # slow_input = input[:, :, ::self.alpha, :, :]
-        slow = self.SlowPath(input, Tc)
+        if self.slow_full_span:
+            slow_input = torch.index_select(
+                input,
+                2,
+                torch.linspace(
+                    0,
+                    input.shape[2] - 1,
+                    input.shape[2] // self.alpha,
+                ).long().cuda(),
+            )
+        else:
+            slow_input = input[:, :, ::self.alpha, :, :]
+        slow = self.SlowPath(slow_input, Tc)
         return [slow, fast]
 
     def SlowPath(self, input, Tc):
@@ -134,12 +134,12 @@ class SlowFast(nn.Module):
         x = self.slow_maxpool(x)
         x = torch.cat([x, Tc[0]], dim=1)
         x = self.slow_res1(x)
-        # x = torch.cat([x, Tc[1]], dim=1)
-        # x = self.slow_res2(x)
-        # x = torch.cat([x, Tc[2]], dim=1)
-        # x = self.slow_res3(x)
-        # x = torch.cat([x, Tc[3]], dim=1)
-        # x = self.slow_res4(x)
+        x = torch.cat([x, Tc[1]], dim=1)
+        x = self.slow_res2(x)
+        x = torch.cat([x, Tc[2]], dim=1)
+        x = self.slow_res3(x)
+        x = torch.cat([x, Tc[3]], dim=1)
+        x = self.slow_res4(x)
         return x
 
     def FastPath(self, input):
