@@ -13,7 +13,7 @@ model:
         arch: slowfast101
         learnable: True
         kwargs:
-            alpha: 1
+            alpha: 2
             beta: 0.125
     neck:
         type: basic

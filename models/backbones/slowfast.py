@@ -6,6 +6,7 @@ References:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 BN = nn.BatchNorm3d
 
@@ -36,7 +37,7 @@ class Bottleneck(nn.Module):
         if downsample is not None:
             self.downsample_bn = BN(planes * 4)
         self.stride = stride
-        self.alpha = 1
+        # self.alpha = 1
 
     def forward(self, x):
         res = x
@@ -65,7 +66,7 @@ class SlowFast(nn.Module):
     def __init__(self, block, layers, alpha=8, beta=0.125, fuse_only_conv=True, fuse_kernel_size=5, slow_full_span=False):
         super(SlowFast, self).__init__()
         
-        self.alpha = 1
+        self.alpha = alpha
         self.beta = beta
         self.slow_full_span = slow_full_span
 
@@ -114,13 +115,20 @@ class SlowFast(nn.Module):
         self.Tconv4 = fuse_func(int(1024 * beta), int(2048 * beta))
         # for input in []:
         # self.slow_conv1_1 =  nn.Conv3d(3, self.fast_inplanes, kernel_size=(5, 7, 7), stride=(1, 2, 2), padding=(2, 3, 3), bias=False)
-        
+        self.pool2 = nn.MaxPool3d(kernel_size=(
+                2, 1, 1), stride=(2, 1, 1), padding=(0, 0, 0))
+    def _upsample(self, x, y):
+        _, _, t, h, w = y.size()
+        # print('spatial', x.shape, y.shape)
+        x_upsampled = F.interpolate(x, [t, h, w], mode='nearest')
+
+        return x_upsampled
+
 
     def forward(self, input):
         fast, Tc = self.FastPath(input)
-        print('alpha',self.alpha)
-        for item in fast:
-            print('fast',item.shape)
+        # print('alpha',self.alpha)
+
         
         if self.slow_full_span:
             slow_input = torch.index_select(
@@ -135,10 +143,17 @@ class SlowFast(nn.Module):
         else:
             slow_input = input[:, :, ::self.alpha, :, :]
         slow = self.SlowPath(slow_input, Tc)
-        for item in slow:
-            print('slow',item.shape)
 
-        return [slow, fast]
+        
+        fast[0] = self.pool2(fast[0])
+        fast[1] = self.pool2(fast[1])
+        fast[2] = self.pool2(fast[2])
+        
+        outFeat = []
+        for sitem,fitem in zip(slow,fast):
+            outFeat.append(torch.cat((sitem,fitem),1))
+            # print(outFeat[-1].shape)
+        return outFeat
 
     def SlowPath(self, input, Tc):
         # print('slowinpdi',input.shape)

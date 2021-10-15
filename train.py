@@ -77,11 +77,11 @@ def train(args, net, train_dataset, val_dataset):
                 net.backbone.apply(utils.set_bn_eval)
         iteration = run_train(args, train_data_loader, net, optimizer, epoch, iteration) 
         
-        # if epoch % args.VAL_STEP == 0 or epoch == args.MAX_EPOCHS:
-        #     net.eval()
-        #     run_val(args, val_data_loader, val_dataset, net, epoch, iteration)
+        if epoch % args.VAL_STEP == 0 or epoch == args.MAX_EPOCHS:
+            net.eval()
+            run_val(args, val_data_loader, val_dataset, net, epoch, iteration)
 
-        # scheduler.step()
+        scheduler.step()
 
 def run_train(args, train_data_loader, net, optimizer, epoch, iteration):
 
@@ -108,56 +108,56 @@ def run_train(args, train_data_loader, net, optimizer, epoch, iteration):
         optimizer.zero_grad()
         # pdb.set_trace()
         loss_l, loss_c = net(images, gt_boxes, gt_labels, ego_labels, counts, img_indexs)
-        print(loss_l.shape)
-        print(loss_c.shape)
+        # print(loss_l.shape)
+        # print(loss_c.shape)
         
-        break
-    #     loss_l, loss_c = loss_l.mean(), loss_c.mean()
-    #     loss = loss_l + loss_c
+        # break
+        loss_l, loss_c = loss_l.mean(), loss_c.mean()
+        loss = loss_l + loss_c
 
-    #     loss.backward()
-    #     optimizer.step()
+        loss.backward()
+        optimizer.step()
         
-    #     loc_loss = loss_l.item()
-    #     conf_loss = loss_c.item()
-    #     if math.isnan(loc_loss) or loc_loss>300:
-    #         lline = '\n\n\n We got faulty LOCATION loss {} {} \n\n\n'.format(loc_loss, conf_loss)
-    #         logger.info(lline)
-    #         loc_loss = 20.0
-    #     if math.isnan(conf_loss) or  conf_loss>300:
-    #         lline = '\n\n\n We got faulty CLASSIFICATION loss {} {} \n\n\n'.format(loc_loss, conf_loss)
-    #         logger.info(lline)
-    #         conf_loss = 20.0
+        loc_loss = loss_l.item()
+        conf_loss = loss_c.item()
+        if math.isnan(loc_loss) or loc_loss>300:
+            lline = '\n\n\n We got faulty LOCATION loss {} {} \n\n\n'.format(loc_loss, conf_loss)
+            logger.info(lline)
+            loc_loss = 20.0
+        if math.isnan(conf_loss) or  conf_loss>300:
+            lline = '\n\n\n We got faulty CLASSIFICATION loss {} {} \n\n\n'.format(loc_loss, conf_loss)
+            logger.info(lline)
+            conf_loss = 20.0
         
-    #     loc_losses.update(loc_loss)
-    #     cls_losses.update(conf_loss)
-    #     losses.update((loc_loss + conf_loss)/2.0)
+        loc_losses.update(loc_loss)
+        cls_losses.update(conf_loss)
+        losses.update((loc_loss + conf_loss)/2.0)
 
-    #     torch.cuda.synchronize()
-    #     batch_time.update(time.perf_counter() - start)
-    #     start = time.perf_counter()
+        torch.cuda.synchronize()
+        batch_time.update(time.perf_counter() - start)
+        start = time.perf_counter()
 
-    #     if internel_iter % args.LOG_STEP == 0 and iteration > args.LOG_START and internel_iter>0:
-    #         if args.TENSORBOARD:
-    #             loss_group = dict()
-    #             loss_group['Classification'] = cls_losses.val
-    #             loss_group['Localisation'] = loc_losses.val
-    #             loss_group['Overall'] = losses.val
-    #             args.sw.add_scalars('Losses', loss_group, iteration)
+        if internel_iter % args.LOG_STEP == 0 and iteration > args.LOG_START and internel_iter>0:
+            if args.TENSORBOARD:
+                loss_group = dict()
+                loss_group['Classification'] = cls_losses.val
+                loss_group['Localisation'] = loc_losses.val
+                loss_group['Overall'] = losses.val
+                args.sw.add_scalars('Losses', loss_group, iteration)
 
-    #         print_line = 'Itration [{:d}/{:d}]{:06d}/{:06d} loc-loss {:.2f}({:.2f}) cls-loss {:.2f}({:.2f}) ' \
-    #                     'average-loss {:.2f}({:.2f}) DataTime {:0.2f}({:0.2f}) Timer {:0.2f}({:0.2f})'.format( epoch, 
-    #                     args.MAX_EPOCHS, iteration, args.MAX_ITERS, loc_losses.val, loc_losses.avg, cls_losses.val,
-    #                     cls_losses.avg, losses.val, losses.avg, 10*data_time.val, 10*data_time.avg, 10*batch_time.val, 10*batch_time.avg)
+            print_line = 'Itration [{:d}/{:d}]{:06d}/{:06d} loc-loss {:.2f}({:.2f}) cls-loss {:.2f}({:.2f}) ' \
+                        'average-loss {:.2f}({:.2f}) DataTime {:0.2f}({:0.2f}) Timer {:0.2f}({:0.2f})'.format( epoch, 
+                        args.MAX_EPOCHS, iteration, args.MAX_ITERS, loc_losses.val, loc_losses.avg, cls_losses.val,
+                        cls_losses.avg, losses.val, losses.avg, 10*data_time.val, 10*data_time.avg, 10*batch_time.val, 10*batch_time.avg)
 
-    #         logger.info(print_line)
-    #         if internel_iter % (args.LOG_STEP*20) == 0:
-    #             logger.info(args.exp_name)
-    # logger.info('Saving state, epoch:' + str(epoch))
-    # torch.save(net.state_dict(), '{:s}/model_{:06d}.pth'.format(args.SAVE_ROOT, epoch))
-    # torch.save(optimizer.state_dict(), '{:s}/optimizer_{:06d}.pth'.format(args.SAVE_ROOT, epoch))
+            logger.info(print_line)
+            if internel_iter % (args.LOG_STEP*20) == 0:
+                logger.info(args.exp_name)
+    logger.info('Saving state, epoch:' + str(epoch))
+    torch.save(net.state_dict(), '{:s}/model_{:06d}.pth'.format(args.SAVE_ROOT, epoch))
+    torch.save(optimizer.state_dict(), '{:s}/optimizer_{:06d}.pth'.format(args.SAVE_ROOT, epoch))
        
-    # return iteration
+    return iteration
 
 
 def run_val(args, val_data_loader, val_dataset, net, epoch, iteration):

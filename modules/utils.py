@@ -144,7 +144,7 @@ def create_exp_name(args):
         )
 
     args.SAVE_ROOT += args.DATASET+'/'
-    args.SAVE_ROOT = args.SAVE_ROOT+'cache/'+args.exp_name+'/'
+    args.SAVE_ROOT = args.SAVE_ROOT+'cache_ROAD_SLOWFAST/'+args.exp_name+'/'
     if not os.path.isdir(args.SAVE_ROOT):
         print('Create: ', args.SAVE_ROOT)
         os.makedirs(args.SAVE_ROOT)
