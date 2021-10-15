@@ -119,10 +119,8 @@ class SlowFast(nn.Module):
     def forward(self, input):
         fast, Tc = self.FastPath(input)
         print('alpha',self.alpha)
-        for item in Tc:
-            print(item.shape)
         for item in fast:
-            print(item.shape)
+            print('fast',item.shape)
         
         if self.slow_full_span:
             slow_input = torch.index_select(
@@ -138,7 +136,7 @@ class SlowFast(nn.Module):
             slow_input = input[:, :, ::self.alpha, :, :]
         slow = self.SlowPath(slow_input, Tc)
         for item in slow:
-            print(item.shape)
+            print('slow',item.shape)
 
         return [slow, fast]
 
