@@ -64,12 +64,12 @@ def gen_dets(args, net, val_dataset):
         
         net.eval() # switch net to evaluation mode        
         mAP, _, ap_strs = perform_detection(args, net, val_data_loader, val_dataset, epoch)
-        # label_types = [args.label_types[0]] + ['ego_action']
-        # for nlt in range(len(label_types)):
-        #     for ap_str in ap_strs[nlt]:
-        #         logger.info(ap_str)
-        # ptr_str = '\n{:s} MEANAP:::=> {:0.5f}'.format(label_types[nlt], mAP[nlt])
-        # logger.info(ptr_str)
+        label_types = [args.label_types[0]] + ['ego_action']
+        for nlt in range(len(label_types)):
+            for ap_str in ap_strs[nlt]:
+                logger.info(ap_str)
+        ptr_str = '\n{:s} MEANAP:::=> {:0.5f}'.format(label_types[nlt], mAP[nlt])
+        logger.info(ptr_str)
 
         torch.cuda.synchronize()
         logger.info('Complete set time {:0.2f}'.format(time.perf_counter() - tt0))
@@ -92,19 +92,16 @@ def perform_detection(args, net,  val_data_loader, val_dataset, iteration):
 
     det_boxes = []
     gt_boxes_all = []
-    # print(args.num_classes_list)
+
     for nlt in range(1):
         numc = args.num_classes_list[nlt]
-        # print('numc',numc)
         det_boxes.append([[] for _ in range(numc)])
         gt_boxes_all.append([])
     
     nlt = 0
     processed_videos = []
-    f = open(args.det_save_dir+"/ROAD_R_predictions.txt", "w")
-    args.det_save_dir
     with torch.no_grad():
-        for val_itr, (images, gt_boxes, gt_targets, ego_labels, batch_counts, img_indexs, wh,videonames,start_frames) in enumerate(val_data_loader):
+        for val_itr, (images, gt_boxes, gt_targets, ego_labels, batch_counts, img_indexs, wh) in enumerate(val_data_loader):
 
             torch.cuda.synchronize()
             t1 = time.perf_counter()
@@ -112,12 +109,11 @@ def perform_detection(args, net,  val_data_loader, val_dataset, iteration):
             batch_size = images.size(0)
             
             images = images.cuda(0, non_blocking=True)
-            # decoded_boxes, confidence, ego_preds = net(images)
-            decoded_boxes, confidence,ego_preds = net(images)
-            # ego_preds = activation(ego_preds).cpu().numpy()
+            decoded_boxes, confidence, ego_preds = net(images)
+            ego_preds = activation(ego_preds).cpu().numpy()
             ego_labels = ego_labels.numpy()
             confidence = activation(confidence)
-            seq_len = args.SEQ_LEN
+            seq_len = ego_preds.shape[1]
             
             if print_time and val_itr%val_step == 0:
                 torch.cuda.synchronize()
@@ -138,13 +134,10 @@ def perform_detection(args, net,  val_data_loader, val_dataset, iteration):
                 if not os.path.isdir(save_dir):
                     os.makedirs(save_dir)
                 count += 1
-                # print(videonames[b])
-                # print(start_frames[b])
-                
                 for s in range(seq_len):
-                    # if ego_labels[b,s]>-1:
-                    #     ego_pds.append(ego_preds[b,s,:])
-                    #     ego_gts.append(ego_labels[b,s])
+                    if ego_labels[b,s]>-1:
+                        ego_pds.append(ego_preds[b,s,:])
+                        ego_gts.append(ego_labels[b,s])
                     
                     gt_boxes_batch = gt_boxes[b, s, :batch_counts[b, s],:].numpy()
                     gt_labels_batch =  gt_targets[b, s, :batch_counts[b, s]].numpy()
@@ -155,24 +148,11 @@ def perform_detection(args, net,  val_data_loader, val_dataset, iteration):
                     scores = confidence_batch[:, 0].squeeze().clone()
                     cls_dets, save_data = utils.filter_detections_for_dumping(args, scores, decoded_boxes_batch, confidence_batch)
                     det_boxes[0][0].append(cls_dets)
-                    save_data_clean = save_data[:, 0:46]
-                    for detts in range(len(save_data_clean)):
-                        single_item = save_data_clean[detts]
-                        f.write(videonames[b]+','+'{:05d}.jpg'.format(start_frames[b]+1+s)+',')
-                        for itt in range(single_item.shape[0]):
-                            f.write(str(single_item[itt])+',')
-                        f.write('\n')
-
-                        # print(single_item.shape[0])
-                        # f.write(str(single_item))
-                    # print(args.det_save_dir)
-                    # print(len(save_data_clean))
-                    # break
-            
+                    
+                    
                     save_name = '{:s}/{:05d}.pkl'.format(save_dir, frame_num+1)
                     frame_num += step_size
-                    # save_data = {'ego':ego_preds[b,s,:], 'main':save_data}
-                    save_data = {'main':save_data}
+                    save_data = {'ego':ego_preds[b,s,:], 'main':save_data}
                     if s<seq_len-args.skip_ending or store_last:
                         with open(save_name,'wb') as ff:
                             pickle.dump(save_data, ff)
@@ -189,14 +169,8 @@ def perform_detection(args, net,  val_data_loader, val_dataset, iteration):
                 logger.info('NMS stuff Time {:0.3f}'.format(te - tf))
 
     mAP, ap_all, ap_strs = evaluate.evaluate(gt_boxes_all, det_boxes, args.all_classes, iou_thresh=args.IOU_THRESH)
-    print(mAP)
-    print(ap_all)
-    print(ap_strs)
-    
-    # mAP_ego, ap_all_ego, ap_strs_ego = evaluate.evaluate_ego(np.asarray(ego_gts), np.asarray(ego_pds),  args.ego_classes)
-    f.close()
-    return mAP , ap_all , ap_strs
-
+    mAP_ego, ap_all_ego, ap_strs_ego = evaluate.evaluate_ego(np.asarray(ego_gts), np.asarray(ego_pds),  args.ego_classes)
+    return mAP + [mAP_ego], ap_all + [ap_all_ego], ap_strs + [ap_strs_ego]
 
 
 
@@ -223,18 +197,17 @@ def gather_framelevel_detection(args, val_dataset):
                 dets = pickle.load(ff)
             frame_name = frame_name.rstrip('.pkl')
             # detections[videoname+frame_name] = {}
-            # if args.DATASET == 'road':
-            #     detections['av_actions'][videoname+frame_name] = dets['ego']
-            # else:
-            #     detections['frame_actions'][videoname+frame_name] = dets['ego']
+            if args.DATASET == 'road':
+                detections['av_actions'][videoname+frame_name] = dets['ego']
+            else:
+                detections['frame_actions'][videoname+frame_name] = dets['ego']
             frame_dets = dets['main']
             
             if args.JOINT_4M_MARGINALS:
                 frame_dets = make_joint_probs_from_marginals(frame_dets, val_dataset.childs, args.num_classes_list)
             
             start_id = 4
-            for l, ltype in enumerate(['agent', 'action', 'loc']):
-                # print(ltype)
+            for l, ltype in enumerate(args.label_types):
                 numc = args.num_classes_list[l]
                 ldets = get_ltype_dets(frame_dets, start_id, numc, ltype, args)
                 detections[ltype][videoname+frame_name] = ldets
@@ -296,7 +269,7 @@ def eval_framewise_dets(args, val_dataset):
             logger.info('Detection will be loaded: ' + args.det_file_name)
         
         if args.DATASET == 'road':
-            label_types = ['agent', 'action', 'loc']
+            label_types =  args.label_types + ['av_actions']
         else:
             label_types = args.label_types + ['frame_actions']
 
@@ -308,7 +281,6 @@ def eval_framewise_dets(args, val_dataset):
                     continue
 
                 sresults = evaluate_frames(val_dataset.anno_file, args.det_file_name, subset, iou_thresh=0.5, dataset=args.DATASET)
-
                 for _, label_type in enumerate(label_types):
                     name = subset + ' & ' + label_type
                     rstr = '\n\nResults for ' + name + '\n'

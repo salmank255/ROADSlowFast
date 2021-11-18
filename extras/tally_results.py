@@ -26,7 +26,7 @@ if __name__ == '__main__':
                 
                 for l in label_types*3:
                     table += ' & ' + l.replace('_','-').capitalize() 
-                for l in label_types:
+                for l in label_types: 
                     atable += ' & ' + l.replace('_','-').capitalize() 
                 table += '\\\\ \n\\midrule\n'
                 atable += '\\\\ \n\\midrule\n'

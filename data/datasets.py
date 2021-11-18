@@ -530,7 +530,7 @@ class VideoDataset(tutils.data.Dataset):
                     boxes[:, 1] *= height # height y1
                     boxes[:, 3] *= height # height y2
 
-        return clip, all_boxes, labels, ego_labels, index, wh, self.num_classes,videoname,start_frame
+        return clip, all_boxes, labels, ego_labels, index, wh, self.num_classes
 
 
 def custum_collate(batch):
@@ -541,9 +541,7 @@ def custum_collate(batch):
     ego_targets = []
     image_ids = []
     whs = []
-    videonames= []
-    start_frames = []
-
+    
     for sample in batch:
         images.append(sample[0])
         boxes.append(sample[1])
@@ -552,8 +550,6 @@ def custum_collate(batch):
         image_ids.append(sample[4])
         whs.append(torch.LongTensor(sample[5]))
         num_classes = sample[6]
-        videonames.append(sample[7])
-        start_frames.append(sample[8])
         
     counts = []
     max_len = -1
@@ -581,4 +577,4 @@ def custum_collate(batch):
     images = get_clip_list_resized(images)
     # print(images.shape)
     return images, new_boxes, new_targets, torch.stack(ego_targets,0), \
-            torch.LongTensor(counts), image_ids, torch.stack(whs,0),videonames,start_frames
+            torch.LongTensor(counts), image_ids, torch.stack(whs,0)
