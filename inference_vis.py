@@ -37,8 +37,8 @@ def set_video(inp, video_name):
 
 def set_out_video(video_name):
     fps = 12
-    video_width = 1280
-    video_height = 960
+    video_width = 704
+    video_height = 512
     size = (video_width, video_height)
     fourcc = cv2.VideoWriter_fourcc(*"XVID")
     video = cv2.VideoWriter(video_name, fourcc, fps, size)
@@ -137,7 +137,7 @@ def main():
                         type=int, help='Number of training epoch before evaluation')
     parser.add_argument('--IOU_THRESH', default=0.5, 
                         type=float, help='Evaluation threshold for validation and for frame-wise mAP')
-    parser.add_argument('--CONF_THRESH', default=0.025, 
+    parser.add_argument('--CONF_THRESH', default=0.5, 
                         type=float, help='Confidence threshold for to remove detection below given number')
     parser.add_argument('--NMS_THRESH', default=0.5, 
                         type=float, help='NMS threshold to apply nms at the time of validation')
@@ -298,154 +298,106 @@ def main():
     logger.info('Loaded model from :: '+args.MODEL_PATH)
     net.load_state_dict(torch.load(args.MODEL_PATH))
 
-    val_data_loader = data_utils.DataLoader(val_dataset, args.BATCH_SIZE, num_workers=args.NUM_WORKERS,
+    val_data_loader = data_utils.DataLoader(val_dataset, 1, num_workers=args.NUM_WORKERS,
                                             shuffle=False, pin_memory=True, collate_fn=custum_collate)
 
+    video = set_out_video('ROAD_test_vid_'+str(args.CONF_THRESH)+'_.MP4')
+    activation = torch.nn.Sigmoid().cuda()
     with torch.no_grad():
-        for val_itr, (images, gt_boxes, gt_targets, ego_labels, batch_counts, img_indexs, wh) in enumerate(val_data_loader):
+        for val_itr, (images, gt_boxes, gt_targets, ego_labels, batch_counts, img_indexs, wh,videonames,start_frames,img_names) in enumerate(val_data_loader):
+
+
             
+            height, width = images.shape[-2:]
+            print(height, width)
+            images = images.cuda(0, non_blocking=True)
+            decoded_boxes, confidence, ego_preds = net(images)
+            confidence = activation(confidence)
+            det_boxes = []
+            for nlt in range(args.num_label_types):
+                numc = args.num_classes_list[nlt]
+                det_boxes.append([[] for _ in range(numc)])
+            for s in range(args.SEQ_LEN):
+                image = cv2.imread(img_names[0][s])
+                image = cv2.resize(image,(width,height))
+                decoded_boxes_frame = decoded_boxes[0, s].clone()
+                cc = 0
+
+
+                for gb in range(len(gt_targets[0][s])):
+                    gt_box = gt_boxes[0][s][gb]
+                   
+                    gt_agent_ind = np.where(gt_targets[0][s][gb][1:11].numpy().astype(int)==1)[0]
+                    gt_agent = ''
+                    for acc in range(len(gt_agent_ind)):
+                        gt_agent = gt_agent+'_'+args.all_classes[1][gt_agent_ind[acc]]
+                    gt_action_ind = np.where(gt_targets[0][s][gb][11:30].numpy().astype(int)==1)[0]
+                    gt_action = ''
+                    for acc in range(len(gt_action_ind)):
+                        gt_action = gt_action+'_'+args.all_classes[2][gt_action_ind[acc]]
+                    gt_location_ind = np.where(gt_targets[0][s][gb][30:42].numpy().astype(int)==1)[0]
+                    gt_location = ''
+                    for acc in range(len(gt_location_ind)):
+                        gt_location = gt_location+'_'+args.all_classes[3][gt_location_ind[acc]]
+                    gt_dup_ind = np.where(gt_targets[0][s][gb][42:81].numpy().astype(int)==1)[0]
+                    gt_dup = ''
+                    for acc in range(len(gt_dup_ind)):
+                        gt_dup = gt_dup+'_'+args.all_classes[4][gt_dup_ind[acc]]
+                    gt_trip_ind = np.where(gt_targets[0][s][gb][81:149].numpy().astype(int)==1)[0]
+                    gt_trip = ''
+                    for acc in range(len(gt_trip_ind)):
+                        gt_trip = gt_trip+'_'+args.all_classes[5][gt_trip_ind[acc]]
+
+                    # print(int(boxes[bb][0]), int(boxes[bb][1]),int(boxes[bb][2]), int(boxes[bb][3]))
+                    cv2.rectangle(image, (int(gt_box[0]), int(gt_box[1])), (int(gt_box[2]), int(gt_box[3])), (0, 255, 0), 2)
+                    cv2.putText(image, gt_agent, (int(gt_box[0]), int(gt_box[1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
+                    cv2.putText(image, gt_action, (int(gt_box[0]), int(gt_box[1]-25)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
+                    cv2.putText(image, gt_location, (int(gt_box[0]), int(gt_box[1]-40)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
+                    cv2.putText(image, gt_dup, (int(gt_box[0]), int(gt_box[1]-55)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
+                    cv2.putText(image, gt_trip, (int(gt_box[0]), int(gt_box[1]-70)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
+                
 
 
 
-    # test_vid_path = '../olympia/test/videos/C0003_fb.MP4'
-    # test_vid_out = 'C0003_fb_splt_th_0_1.MP4'
 
-    # cap,video,fps = set_video(test_vid_path,test_vid_out)
-    # activation = torch.nn.Sigmoid().cuda()
-    # f_n=1
-    # with torch.no_grad():
-    #     while(cap):
-    #         images = []
-    #         images_org = []
-            
-    #         for i in range(args.SEQ_LEN):
-    #             ret, frame = cap.read()
-    #             f_n += 1
-    #             print(f_n)
-    #             if ret==False:
-    #                 break
-    #             # You may need to convert the color.
-    #             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    #             im_pil = Image.fromarray(img)
-    #             images.append(im_pil)
-    #             images_org.append(frame)
-    #         clip = ttransform(images)
-    #         height, width = clip.shape[-2:]
-    #         n_imgs = clip.shape[1]
-    #         if n_imgs !=8:
-    #             break
-    #         clip = torch.unsqueeze(clip,0)
-    #         # print(clip.shape)
-            
-    #         clip = clip.cuda(0, non_blocking=True)
-    #         decoded_boxes, confidence, ego_preds = net(clip)
-    #         confidence = activation(confidence)
-    #         # print(decoded_boxes.shape)
-    #         # print(confidence.shape)
-    #         # print(ego_preds.shape)
-    #         det_boxes = []
-    #         for nlt in range(args.num_label_types):
-    #             numc = args.num_classes_list[nlt]
-    #             det_boxes.append([[] for _ in range(numc)])
-    #         for s in range(args.SEQ_LEN):
-    #             image = images_org[s]
-    #             image = cv2.resize(image,(width,height))
-    #             decoded_boxes_frame = decoded_boxes[0, s].clone()
-    #             cc = 0 
-    #             for nlt in range(1,args.num_label_types):
-    #                 num_c = args.num_classes_list[nlt]
-    #                 # tgt_labels = gt_labels_batch[:,cc:cc+num_c]
-    #                 # # print(gt_boxes_batch.shape, tgt_labels.shape)
-    #                 # frame_gt = get_individual_labels(gt_boxes_batch, tgt_labels)
-    #                 # gt_boxes_all[nlt].append(frame_gt)
-    #                 for cl_ind in range(num_c):
-    #                     scores = confidence[0, s, :, cc].clone().squeeze()
-    #                     cc += 1
-    #                     cls_dets = utils.filter_detections(args, scores, decoded_boxes_frame)
-    #                     det_boxes[nlt][cl_ind].append(cls_dets)
-    #                     # print(cls_dets)                   
-    #                     classname = olympia_classes[cl_ind]
-    #                     # print(classname)
-    #                     # scores = conf_scores[:, cl_ind].squeeze()
-    #                     # #print(scores.shape)
-    #                     # c_mask = scores.gt(args.conf_thresh)  # greater than minmum threshold
-    #                     # scores = scores[c_mask].squeeze()
-    #                     # #print(scores)
-    #                     # # print('scores size',scores.size())
-    #                     # if scores.dim() == 0:
-    #                     #     # print(len(''), ' dim ==0 ')
-    #                     #     det_boxes[cl_ind - 1].append(np.asarray([]))
-    #                     #     continue
-    #                     # boxes = decoded_boxes.clone()
-                    
-    #                     # l_mask = c_mask.unsqueeze(1).expand_as(boxes)
-                    
-    #                     # boxes = boxes[l_mask].view(-1, 4)
-    #                     # #print(boxes.shape)
-
-    #                     # # idx of highest scoring and non-overlapping boxes per class
-    #                     # ids, counts = nms(boxes, scores, args.nms_thresh, args.topk)  # idsn - ids after nms
-    #                     # #print(counts)
-    #                     # scores = scores[ids[:counts]].numpy()
-    #                     # #print(boxes)
-    #                     # boxes = boxes[ids[:counts]].numpy()
-    #                     # #print('boxes shape',boxes)
-    #                     # boxes[:, 0] *= width
-    #                     # boxes[:, 2] *= width
-    #                     # boxes[:, 1] *= height
-    #                     # boxes[:, 3] *= height
-    #                     #print(boxes)
-    #                     boxes = cls_dets
-    #                     if boxes.shape !=(0,4):
-    #                         #print('boxes sahpe',boxes[0][0])
-    #                         for bb in range(boxes.shape[0]):
-    #                             boxes[bb, 0] = max(0, boxes[bb, 0])
-    #                             boxes[bb, 2] = min(width, boxes[bb, 2])
-    #                             boxes[bb, 1] = max(0, boxes[bb, 1])
-    #                             boxes[bb, 3] = min(height, boxes[bb, 3])
-    #                             # print(int(boxes[bb][0]), int(boxes[bb][1]),int(boxes[bb][2]), int(boxes[bb][3]))
-    #                             cv2.rectangle(image, (int(boxes[bb][0]), int(boxes[bb][1])), (int(boxes[bb][2]), int(boxes[bb][3])), (0, 255, 0), 2)
-    #                             cv2.putText(image, classname, (int(boxes[bb][0]), int(boxes[bb][1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 1)
-    #                         #cv2.rectangle(image2, (boxes[1][0], boxes[1][1]), (boxes[1][2], boxes[1][3]), (0, 255, 0), 2)
-    #                         #cv2.putText(image2, classname, (int(boxes[1][0]), int(boxes[1][1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 1)
-    #                 # cv2.imwrite('out.png',image)
-    #                 video.write(image)
-    #         # break
-    # cap.release()
-    # video.release()
+                for nlt in range(1,args.num_label_types):
+                    num_c = args.num_classes_list[nlt]
+                    # tgt_labels = gt_labels_batch[:,cc:cc+num_c]
+                    # # print(gt_boxes_batch.shape, tgt_labels.shape)
+                    # frame_gt = get_individual_labels(gt_boxes_batch, tgt_labels)
+                    # gt_boxes_all[nlt].append(frame_gt)
+                    for cl_ind in range(num_c):
+                        scores = confidence[0, s, :, cc].clone().squeeze()
+                        # print(scores.shape)
+                        # print(rr)
+                        cc += 1
+                        cls_dets = utils.filter_detections(args, scores, decoded_boxes_frame)
+                        det_boxes[nlt][cl_ind].append(cls_dets)
+                        # print(cls_dets)                   
+                        classname = args.all_classes[nlt][cl_ind]
+                        
+                        boxes = cls_dets
+                        if boxes.shape !=(0,4):
+                            #print('boxes sahpe',boxes[0][0])
+                            for bb in range(boxes.shape[0]):
+                                boxes[bb, 0] = max(0, boxes[bb, 0])
+                                boxes[bb, 2] = min(width, boxes[bb, 2])
+                                boxes[bb, 1] = max(0, boxes[bb, 1])
+                                boxes[bb, 3] = min(height, boxes[bb, 3])
+                                # print(int(boxes[bb][0]), int(boxes[bb][1]),int(boxes[bb][2]), int(boxes[bb][3]))
+                                cv2.rectangle(image, (int(boxes[bb][0]), int(boxes[bb][1])), (int(boxes[bb][2]), int(boxes[bb][3])), (0, 0, 255), 2)
+                                cv2.putText(image, classname, (int(boxes[bb][0]), int(boxes[bb][1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 1)
+                            #cv2.rectangle(image2, (boxes[1][0], boxes[1][1]), (boxes[1][2], boxes[1][3]), (0, 255, 0), 2)
+                            #cv2.putText(image2, classname, (int(boxes[1][0]), int(boxes[1][1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 1)
+                    # cv2.imwrite('out.png',image)
+                video.write(image)
+    video.release()
         
                         
 
 
 
 
-
-    # for arg in sorted(vars(args)):
-    #     logger.info(str(arg)+': '+str(getattr(args, arg)))
-    
-    # if args.MODE == 'train':
-    #     if args.FBN:
-    #         if args.MULTI_GPUS:
-    #             net.module.backbone.apply(utils.set_bn_eval)
-    #         else:
-    #             net.backbone.apply(utils.set_bn_eval)
-    #     train(args, net, train_dataset, val_dataset)
-    # args.EVAL_EPOCHS = args.MAX_EPOCHS
-    # args.MODE = 'val'
-    # val(args, net, val_dataset)
-    # args.MODE = 'test'
-    # val(args, net, test_dataset)
-
-
-    # # elif args.MODE == 'gen_dets':
-    # #     gen_dets(args, net, val_dataset)
-    # #     eval_framewise_dets(args, val_dataset)
-    # #     build_eval_tubes(args, val_dataset)
-    # # elif args.MODE == 'eval_frames':
-    # #     eval_framewise_dets(args, val_dataset)
-    # # elif args.MODE == 'eval_tubes':
-    # #     build_eval_tubes(args, val_dataset)
-    
 
 if __name__ == "__main__":
     main()
