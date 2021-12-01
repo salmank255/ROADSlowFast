@@ -239,6 +239,7 @@ def filter_detections_for_dumping(args, scores, decoded_boxes_batch, confidences
     cls_dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=True)
     save_data = np.hstack((cls_dets, confidences[:,1:])).astype(np.float32)
     #print(save_data.shape)
+
     return cls_dets, save_data
 
 def make_joint_probs_from_marginals(frame_dets, childs, num_classes_list, start_id=4):

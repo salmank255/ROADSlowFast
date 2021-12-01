@@ -116,7 +116,7 @@ def main():
                         type=float, help='NMS threshold to apply nms at the time of validation')
     parser.add_argument('--TOPK', default=10, 
                         type=int, help='topk detection to keep for evaluation')
-    parser.add_argument('--GEN_CONF_THRESH', default=0.025, 
+    parser.add_argument('--2', default=0.025, 
                         type=float, help='Confidence threshold at the time of generation and dumping')
     parser.add_argument('--GEN_TOPK', default=100, 
                         type=int, help='topk at the time of generation')

@@ -143,7 +143,7 @@ def main():
                         type=float, help='NMS threshold to apply nms at the time of validation')
     parser.add_argument('--TOPK', default=10, 
                         type=int, help='topk detection to keep for evaluation')
-    parser.add_argument('--GEN_CONF_THRESH', default=0.025, 
+    parser.add_argument('--GEN_CONF_THRESH', default=0.5, 
                         type=float, help='Confidence threshold at the time of generation and dumping')
     parser.add_argument('--GEN_TOPK', default=100, 
                         type=int, help='topk at the time of generation')
@@ -301,7 +301,7 @@ def main():
     val_data_loader = data_utils.DataLoader(val_dataset, 1, num_workers=args.NUM_WORKERS,
                                             shuffle=False, pin_memory=True, collate_fn=custum_collate)
 
-    video = set_out_video('ROAD_test_vid_'+str(args.CONF_THRESH)+'_.MP4')
+    video = set_out_video('ROAD_test_vid_'+str(args.GEN_CONF_THRESH)+'_.MP4')
     activation = torch.nn.Sigmoid().cuda()
     with torch.no_grad():
         for val_itr, (images, gt_boxes, gt_targets, ego_labels, batch_counts, img_indexs, wh,videonames,start_frames,img_names) in enumerate(val_data_loader):
@@ -309,7 +309,7 @@ def main():
 
             
             height, width = images.shape[-2:]
-            print(height, width)
+            print(val_itr)
             images = images.cuda(0, non_blocking=True)
             decoded_boxes, confidence, ego_preds = net(images)
             confidence = activation(confidence)
@@ -350,46 +350,71 @@ def main():
 
                     # print(int(boxes[bb][0]), int(boxes[bb][1]),int(boxes[bb][2]), int(boxes[bb][3]))
                     cv2.rectangle(image, (int(gt_box[0]), int(gt_box[1])), (int(gt_box[2]), int(gt_box[3])), (0, 255, 0), 2)
-                    cv2.putText(image, gt_agent, (int(gt_box[0]), int(gt_box[1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
-                    cv2.putText(image, gt_action, (int(gt_box[0]), int(gt_box[1]-25)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
-                    cv2.putText(image, gt_location, (int(gt_box[0]), int(gt_box[1]-40)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
-                    cv2.putText(image, gt_dup, (int(gt_box[0]), int(gt_box[1]-55)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
-                    cv2.putText(image, gt_trip, (int(gt_box[0]), int(gt_box[1]-70)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (36,255,12), 1)
+                    cv2.putText(image, gt_agent, (int(gt_box[0]), int(gt_box[1]-70)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
+                    cv2.putText(image, gt_action, (int(gt_box[0]), int(gt_box[1]-55)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
+                    cv2.putText(image, gt_location, (int(gt_box[0]), int(gt_box[1]-40)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
+                    cv2.putText(image, gt_dup, (int(gt_box[0]), int(gt_box[1]-25)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
+                    cv2.putText(image, gt_trip, (int(gt_box[0]), int(gt_box[1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
                 
 
 
 
+                    
+                gt_boxes_batch = gt_boxes[0, s, :batch_counts[0, s],:].numpy()
+                gt_labels_batch =  gt_targets[0, s, :batch_counts[0, s]].numpy()
+                decoded_boxes_batch = decoded_boxes[0,s]
+                frame_gt = utils.get_individual_labels(gt_boxes_batch, gt_labels_batch[:,:1])
+                # gt_boxes_all[0].append(frame_gt)
+                confidence_batch = confidence[0,s]
+                scores = confidence_batch[:, 0].squeeze().clone()
+                cls_dets, save_data = utils.filter_detections_for_dumping(args, scores, decoded_boxes_batch, confidence_batch)
+                # print(save_data)
+                # print(conf)
+                for ppred in save_data:
+                    bbox = ppred[:4]
+                    # print(bbox)
+                    agent_lab_ind = max(ppred[5:15])
+                    if agent_lab_ind > args.GEN_CONF_THRESH:
+                        agent_lab = args.all_classes[1][np.argmax(ppred[5:15])]
+                    else:
+                        agent_lab = ''
+                    
+                    action_lab_ind = max(ppred[15:34])
+                    if action_lab_ind > args.GEN_CONF_THRESH:
+                        action_lab = args.all_classes[2][np.argmax(ppred[15:34])]
+                    else:
+                        action_lab = ''
 
-                for nlt in range(1,args.num_label_types):
-                    num_c = args.num_classes_list[nlt]
-                    # tgt_labels = gt_labels_batch[:,cc:cc+num_c]
-                    # # print(gt_boxes_batch.shape, tgt_labels.shape)
-                    # frame_gt = get_individual_labels(gt_boxes_batch, tgt_labels)
-                    # gt_boxes_all[nlt].append(frame_gt)
-                    for cl_ind in range(num_c):
-                        scores = confidence[0, s, :, cc].clone().squeeze()
-                        # print(scores.shape)
-                        # print(rr)
-                        cc += 1
-                        cls_dets = utils.filter_detections(args, scores, decoded_boxes_frame)
-                        det_boxes[nlt][cl_ind].append(cls_dets)
-                        # print(cls_dets)                   
-                        classname = args.all_classes[nlt][cl_ind]
-                        
-                        boxes = cls_dets
-                        if boxes.shape !=(0,4):
-                            #print('boxes sahpe',boxes[0][0])
-                            for bb in range(boxes.shape[0]):
-                                boxes[bb, 0] = max(0, boxes[bb, 0])
-                                boxes[bb, 2] = min(width, boxes[bb, 2])
-                                boxes[bb, 1] = max(0, boxes[bb, 1])
-                                boxes[bb, 3] = min(height, boxes[bb, 3])
-                                # print(int(boxes[bb][0]), int(boxes[bb][1]),int(boxes[bb][2]), int(boxes[bb][3]))
-                                cv2.rectangle(image, (int(boxes[bb][0]), int(boxes[bb][1])), (int(boxes[bb][2]), int(boxes[bb][3])), (0, 0, 255), 2)
-                                cv2.putText(image, classname, (int(boxes[bb][0]), int(boxes[bb][1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 1)
-                            #cv2.rectangle(image2, (boxes[1][0], boxes[1][1]), (boxes[1][2], boxes[1][3]), (0, 255, 0), 2)
-                            #cv2.putText(image2, classname, (int(boxes[1][0]), int(boxes[1][1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 1)
-                    # cv2.imwrite('out.png',image)
+                    loc_lab_ind = max(ppred[34:46])
+                    if loc_lab_ind > args.GEN_CONF_THRESH:
+                        loc_lab = args.all_classes[3][np.argmax(ppred[34:46])]
+                    else:
+                        loc_lab = ''
+
+                    dup_lab_ind = max(ppred[46:85])
+                    if dup_lab_ind > args.GEN_CONF_THRESH:
+                        dup_lab = args.all_classes[4][np.argmax(ppred[46:85])]
+                    else:
+                        dup_lab = ''
+
+                    trip_lab_ind = max(ppred[85:153])
+                    if trip_lab_ind > args.GEN_CONF_THRESH:
+                        trip_lab = args.all_classes[5][np.argmax(ppred[85:153])]
+                    else:
+                        trip_lab = ''
+                    # print(agent_lab)
+                    # print(action_lab)
+                    # print(loc_lab)
+                    # print(dup_lab)
+                    # print(trip_lab)
+
+                    cv2.rectangle(image, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 0, 255), 2)
+                    cv2.putText(image, agent_lab, (int(bbox[0]), int(bbox[3]+10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
+                    cv2.putText(image, action_lab, (int(bbox[0]), int(bbox[3]+25)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
+                    cv2.putText(image, loc_lab, (int(bbox[0]), int(bbox[3]+40)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
+                    cv2.putText(image, dup_lab, (int(bbox[0]), int(bbox[3]+55)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
+                    cv2.putText(image, trip_lab, (int(bbox[0]), int(bbox[3]+70)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
+
                 video.write(image)
     video.release()
         
