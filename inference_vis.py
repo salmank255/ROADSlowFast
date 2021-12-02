@@ -37,8 +37,8 @@ def set_video(inp, video_name):
 
 def set_out_video(video_name):
     fps = 12
-    video_width = 704
-    video_height = 512
+    video_width = 1280
+    video_height = 960
     size = (video_width, video_height)
     fourcc = cv2.VideoWriter_fourcc(*"XVID")
     video = cv2.VideoWriter(video_name, fourcc, fps, size)
@@ -306,7 +306,6 @@ def main():
     with torch.no_grad():
         for val_itr, (images, gt_boxes, gt_targets, ego_labels, batch_counts, img_indexs, wh,videonames,start_frames,img_names) in enumerate(val_data_loader):
 
-
             
             height, width = images.shape[-2:]
             print(val_itr)
@@ -319,10 +318,10 @@ def main():
                 det_boxes.append([[] for _ in range(numc)])
             for s in range(args.SEQ_LEN):
                 image = cv2.imread(img_names[0][s])
-                image = cv2.resize(image,(width,height))
+                # image = cv2.resize(image,(width,height))
+                org_height,org_width = image.shape[:2]
                 decoded_boxes_frame = decoded_boxes[0, s].clone()
                 cc = 0
-
 
                 for gb in range(len(gt_targets[0][s])):
                     gt_box = gt_boxes[0][s][gb]
@@ -347,6 +346,12 @@ def main():
                     gt_trip = ''
                     for acc in range(len(gt_trip_ind)):
                         gt_trip = gt_trip+'_'+args.all_classes[5][gt_trip_ind[acc]]
+
+                    gt_box[0] = (gt_box[0]/682)*org_width # width x1
+                    gt_box[2] = (gt_box[2]/682)*org_width # width x2
+                    gt_box[1] = (gt_box[1]/512)*org_height # height y1
+                    gt_box[3] = (gt_box[3]/512)*org_height # height y2
+
 
                     # print(int(boxes[bb][0]), int(boxes[bb][1]),int(boxes[bb][2]), int(boxes[bb][3]))
                     cv2.rectangle(image, (int(gt_box[0]), int(gt_box[1])), (int(gt_box[2]), int(gt_box[3])), (0, 255, 0), 2)
@@ -407,6 +412,10 @@ def main():
                     # print(loc_lab)
                     # print(dup_lab)
                     # print(trip_lab)
+                    bbox[0] = (bbox[0]/682)*org_width # width x1
+                    bbox[2] = (bbox[2]/682)*org_width # width x2
+                    bbox[1] = (bbox[1]/512)*org_height # height y1
+                    bbox[3] = (bbox[3]/512)*org_height # height y2
 
                     cv2.rectangle(image, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 0, 255), 2)
                     cv2.putText(image, agent_lab, (int(bbox[0]), int(bbox[3]+10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
