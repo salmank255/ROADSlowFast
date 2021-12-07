@@ -461,8 +461,8 @@ class VideoDataset(tutils.data.Dataset):
             
             # print('start_frames',start_frames)
             # print(rr)
-            if self.full_test and 0 not in start_frames:
-                start_frames.append(0)
+            # if self.full_test and 0 not in start_frames:
+            #     start_frames.append(0)
             logger.info('number of start frames: '+ str(len(start_frames)))
             for frame_num in start_frames:
                 step_list = [s for s in range(self.MIN_SEQ_STEP, self.MAX_SEQ_STEP+1) if numf-s*self.SEQ_LEN>=frame_num]
