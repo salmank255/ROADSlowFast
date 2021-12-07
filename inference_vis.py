@@ -355,11 +355,11 @@ def main():
 
                     # print(int(boxes[bb][0]), int(boxes[bb][1]),int(boxes[bb][2]), int(boxes[bb][3]))
                     cv2.rectangle(image, (int(gt_box[0]), int(gt_box[1])), (int(gt_box[2]), int(gt_box[3])), (0, 255, 0), 2)
-                    cv2.putText(image, gt_agent, (int(gt_box[0]), int(gt_box[1]-70)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
-                    cv2.putText(image, gt_action, (int(gt_box[0]), int(gt_box[1]-55)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
-                    cv2.putText(image, gt_location, (int(gt_box[0]), int(gt_box[1]-40)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
-                    cv2.putText(image, gt_dup, (int(gt_box[0]), int(gt_box[1]-25)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
-                    cv2.putText(image, gt_trip, (int(gt_box[0]), int(gt_box[1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (36,255,12), 2)
+                    cv2.putText(image, gt_agent, (int(gt_box[0]), int(gt_box[1]-100)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36,255,12), 2)
+                    cv2.putText(image, gt_action, (int(gt_box[0]), int(gt_box[1]-80)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36,255,12), 2)
+                    cv2.putText(image, gt_location, (int(gt_box[0]), int(gt_box[1]-60)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36,255,12), 2)
+                    cv2.putText(image, gt_dup, (int(gt_box[0]), int(gt_box[1]-40)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36,255,12), 2)
+                    cv2.putText(image, gt_trip, (int(gt_box[0]), int(gt_box[1]-20)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36,255,12), 2)
                 
 
 
@@ -418,11 +418,11 @@ def main():
                     bbox[3] = (bbox[3]/512)*org_height # height y2
 
                     cv2.rectangle(image, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (0, 0, 255), 2)
-                    cv2.putText(image, agent_lab, (int(bbox[0]), int(bbox[3]+10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
-                    cv2.putText(image, action_lab, (int(bbox[0]), int(bbox[3]+25)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
-                    cv2.putText(image, loc_lab, (int(bbox[0]), int(bbox[3]+40)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
-                    cv2.putText(image, dup_lab, (int(bbox[0]), int(bbox[3]+55)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
-                    cv2.putText(image, trip_lab, (int(bbox[0]), int(bbox[3]+70)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (11,12,255), 2)
+                    cv2.putText(image, agent_lab, (int(bbox[0]), int(bbox[3]+20)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (11,12,255), 2)
+                    cv2.putText(image, action_lab, (int(bbox[0]), int(bbox[3]+40)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (11,12,255), 2)
+                    cv2.putText(image, loc_lab, (int(bbox[0]), int(bbox[3]+60)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (11,12,255), 2)
+                    cv2.putText(image, dup_lab, (int(bbox[0]), int(bbox[3]+80)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (11,12,255), 2)
+                    cv2.putText(image, trip_lab, (int(bbox[0]), int(bbox[3]+100)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (11,12,255), 2)
 
                 video.write(image)
     video.release()
